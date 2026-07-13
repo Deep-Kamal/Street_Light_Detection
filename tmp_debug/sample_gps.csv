@@ -1,0 +1,5 @@
+point_type,frame_no,elapsed_ms,latitude,longitude,timestamp
+recorded,,0,10.0,20.0,2020-01-01T00:00:00
+recorded,,1000,10.0,20.0,2020-01-01T00:00:01
+interpolated,0,,10.0,20.0,2020-01-01T00:00:00
+interpolated,1,,10.0,20.0,2020-01-01T00:00:01
