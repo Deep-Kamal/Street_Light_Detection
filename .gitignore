@@ -26,7 +26,7 @@ uploads/
 .DS_Store
 Thumbs.db
 
-# Docker
-*.log
-model/
-*.pt
+# # Docker
+# *.log
+# model/
+# *.pt
