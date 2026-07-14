@@ -32,6 +32,54 @@ from ultralytics import YOLO
 
 logger = logging.getLogger("streetlight_pipeline")
 
+# Custom ByteTrack settings: the Ultralytics default (track_buffer: 30) drops
+# a lost track after only 30 frames without a match, which is shorter than
+# how long a streetlight can stay occluded (tree branches, motion blur,
+# leaving/re-entering frame). That caused one physical light to be logged as
+# several different tracked "objects", inflating the detected_frames.zip and
+# detections.csv output. Raising track_buffer keeps a lost track alive
+# longer, and loosening match_thresh makes it easier to re-associate a
+# re-appearing detection with its original ID instead of starting a new one.
+_BYTETRACK_STREETLIGHT_YAML = """\
+tracker_type: bytetrack
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.25
+track_buffer: 90
+match_thresh: 0.85
+fuse_score: True
+"""
+
+
+def _resolve_tracker_config() -> str:
+    """
+    Returns a filesystem path to the custom ByteTrack config, writing it out
+    on the fly if it isn't already deployed next to this file. This makes
+    the pipeline resilient to the config being left out of a build/deploy -
+    previously a missing bytetrack_streetlight.yaml crashed the whole job.
+    """
+    deployed_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bytetrack_streetlight.yaml")
+    if os.path.isfile(deployed_path):
+        return deployed_path
+
+    fallback_path = "/tmp/bytetrack_streetlight.yaml"
+    try:
+        if not os.path.isfile(fallback_path):
+            with open(fallback_path, "w") as f:
+                f.write(_BYTETRACK_STREETLIGHT_YAML)
+        logger.warning(
+            "bytetrack_streetlight.yaml not found next to pipeline.py (expected at %s); "
+            "generated a copy at %s instead. Add the file to your deployment to avoid this warning.",
+            deployed_path, fallback_path,
+        )
+        return fallback_path
+    except OSError as e:
+        logger.warning(
+            "Could not write fallback tracker config (%s); falling back to Ultralytics' "
+            "default bytetrack.yaml. Streetlight ID-switching/over-counting may occur.", e,
+        )
+        return "bytetrack.yaml"  # ultralytics' built-in default, bundled with the package
+
 
 # ──────────────────────────────────────────────────────────────────────────
 # Config
@@ -229,6 +277,7 @@ def run_pipeline(cfg: PipelineConfig, progress_cb=None):
     os.makedirs(cfg.output_dir, exist_ok=True)
 
     model = YOLO(cfg.model_path)
+    tracker_config = _resolve_tracker_config()
 
     cap = cv2.VideoCapture(cfg.video_path)
     if not cap.isOpened():
@@ -309,7 +358,7 @@ def run_pipeline(cfg: PipelineConfig, progress_cb=None):
 
             results = model.track(
                 frame, persist=True, conf=cfg.conf, verbose=False,
-                tracker=os.path.join(os.path.dirname(__file__), "bytetrack_streetlight.yaml"),
+                tracker=tracker_config,
             )
             annotated = results[0].plot()
             boxes = results[0].boxes
