@@ -77,7 +77,7 @@ STREETLIGHT_APP/
 │       ├── templates/       # Operator web UI (index.html)
 │       └── flask_app.py     # Flask frontend — serves the UI, proxies API calls to the backend
 ├── jobs/                    # Per-job uploads, outputs, and job registry (created at runtime)
-├── model/                   # Detection model weights (.pt), bind-mounted into the container
+├── model/                   # Detection model weights (.pt), bind-mounted into the container 
 ├── tests/                   # Test suite
 ├── tmp_debug/                # Scratch/debug output (not required for normal operation)
 ├── venv/                    # Local Python virtual environment (not committed)
