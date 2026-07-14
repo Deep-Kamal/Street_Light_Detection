@@ -47,23 +47,23 @@ The primary pipeline (`model_type: streetlight`) combines YOLO object tracking w
 
 **Dashboard — idle state, before any file is uploaded**
 
-![Dashboard idle state](screenshots/dashboard-idle.png)
+![Dashboard idle state](dashboard-idle.png)
 
 **Job completed — annotated video playback with GPS/compass HUD**
 
 The bounding box, tracked object ID, confidence score, and the live GPS/compass heads-up display (`LAT`, `LON`, `DIR`, `FRAME`) are all rendered directly on the output video.
 
-![Detection video playback](screenshots/detection-video-playback.png)
+![Detection video playback](detection-video-playback.png)
 
 **Job completed — results panel with map reset to default extent**
 
-![Dashboard with completed job, map reset](screenshots/dashboard-map-reset.png)
+![Dashboard with completed job, map reset](dashboard-map-reset.png)
 
 **Detections plotted on the GPS map**
 
 Selecting **Plot on Map** re-centres the map on the survey route and drops a marker for every logged detection.
 
-![Plotted detections on map](screenshots/plotted-map-detection.png)
+![Plotted detections on map](plotted-map-detection.png)
 
 ## Project Structure
 
