@@ -247,7 +247,3 @@ For production deployments, mount `DETECTION_DATA_DIR` and `model/` to persisten
 ```bash
 pytest tests/
 ```
-
-## Acknowledgments
-
-Developed at the **Remote Sensing Applications Centre, Uttar Pradesh (RSAC-UP)**, an autonomous organisation under the Department of Science & Technology, Government of Uttar Pradesh.
