@@ -1,0 +1,32 @@
+services:
+  detection-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TORCH_VARIANT: auto   # "auto" (GPU-capable, falls back to CPU) or "cpu"
+    container_name: detection-app-container
+    ports:
+      - "5000:5000"   # operator UI (Flask)
+      - "8000:8000"   # API (FastAPI), for direct/API-only access
+    volumes:
+      - detection_data:/tmp/detection_jobs
+      - ./model:/srv/model
+    restart: unless-stopped
+
+    # ── GPU support (optional) ──────────────────────────────────────────────
+    # Requires: an NVIDIA GPU + driver on the HOST machine, and the NVIDIA
+    # Container Toolkit installed (see README below). If either is missing,
+    # comment out the "deploy" block below and the container will simply run
+    # on CPU - no other change needed, since device="auto" (the default for
+    # every job) detects this automatically at runtime.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  detection_data:

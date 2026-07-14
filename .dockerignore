@@ -7,11 +7,3 @@ __pycache__/
 venv/
 *.log
 .DS_Store
-tests/
-notebooks/
-*.ipynb
-frontend/node_modules/
-data/
-outputs/
-*.mp4
-*.zip

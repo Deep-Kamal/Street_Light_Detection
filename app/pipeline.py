@@ -13,8 +13,19 @@ Given:
 
 Produces:
   - an annotated output video (detections + GPS/compass HUD watermark)
-  - a detections CSV (one row per detected object per frame)
-  - a ZIP of the single best ("closest") snapshot per tracked object
+  - a detections CSV (one row per detected object per frame — never a row
+    for a frame with no detection, so anything built from this CSV, such as
+    the map points below, is detected-frames-only by construction)
+  - a ZIP of the single best ("closest") snapshot per tracked object, whose
+    integrity (exactly one image per object, and it really is that object's
+    minimum-distance frame) is verified once processing finishes rather than
+    just assumed
+
+Also exposes get_map_points(), a small helper that returns only the
+detected-frame GPS points from a completed job's CSV — the same rows a
+consumer (e.g. main.py's map-data endpoint) should plot, as opposed to the
+full per-frame survey GPS track in gps_csv_path, which includes frames where
+nothing was detected and should never be plotted as a "detection".
 """
 
 import os
@@ -31,54 +42,6 @@ from scipy.interpolate import interp1d
 from ultralytics import YOLO
 
 logger = logging.getLogger("streetlight_pipeline")
-
-# Custom ByteTrack settings: the Ultralytics default (track_buffer: 30) drops
-# a lost track after only 30 frames without a match, which is shorter than
-# how long a streetlight can stay occluded (tree branches, motion blur,
-# leaving/re-entering frame). That caused one physical light to be logged as
-# several different tracked "objects", inflating the detected_frames.zip and
-# detections.csv output. Raising track_buffer keeps a lost track alive
-# longer, and loosening match_thresh makes it easier to re-associate a
-# re-appearing detection with its original ID instead of starting a new one.
-_BYTETRACK_STREETLIGHT_YAML = """\
-tracker_type: bytetrack
-track_high_thresh: 0.25
-track_low_thresh: 0.1
-new_track_thresh: 0.25
-track_buffer: 90
-match_thresh: 0.85
-fuse_score: True
-"""
-
-
-def _resolve_tracker_config() -> str:
-    """
-    Returns a filesystem path to the custom ByteTrack config, writing it out
-    on the fly if it isn't already deployed next to this file. This makes
-    the pipeline resilient to the config being left out of a build/deploy -
-    previously a missing bytetrack_streetlight.yaml crashed the whole job.
-    """
-    deployed_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bytetrack_streetlight.yaml")
-    if os.path.isfile(deployed_path):
-        return deployed_path
-
-    fallback_path = "/tmp/bytetrack_streetlight.yaml"
-    try:
-        if not os.path.isfile(fallback_path):
-            with open(fallback_path, "w") as f:
-                f.write(_BYTETRACK_STREETLIGHT_YAML)
-        logger.warning(
-            "bytetrack_streetlight.yaml not found next to pipeline.py (expected at %s); "
-            "generated a copy at %s instead. Add the file to your deployment to avoid this warning.",
-            deployed_path, fallback_path,
-        )
-        return fallback_path
-    except OSError as e:
-        logger.warning(
-            "Could not write fallback tracker config (%s); falling back to Ultralytics' "
-            "default bytetrack.yaml. Streetlight ID-switching/over-counting may occur.", e,
-        )
-        return "bytetrack.yaml"  # ultralytics' built-in default, bundled with the package
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -277,7 +240,6 @@ def run_pipeline(cfg: PipelineConfig, progress_cb=None):
     os.makedirs(cfg.output_dir, exist_ok=True)
 
     model = YOLO(cfg.model_path)
-    tracker_config = _resolve_tracker_config()
 
     cap = cv2.VideoCapture(cfg.video_path)
     if not cap.isOpened():
@@ -285,21 +247,8 @@ def run_pipeline(cfg: PipelineConfig, progress_cb=None):
 
     fps_in = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    # NOTE: cap.get(CAP_PROP_FRAME_WIDTH/HEIGHT) reports the video's raw
-    # coded dimensions from container metadata. When the source video carries
-    # a rotation flag (e.g. a portrait phone recording tagged 90 degrees),
-    # OpenCV's FFmpeg backend auto-applies that rotation to the actual pixel
-    # data returned by cap.read() - but CAP_PROP_FRAME_WIDTH/HEIGHT keep
-    # reporting the PRE-rotation values. That mismatch was causing the
-    # VideoWriter below to be initialized with swapped/wrong dimensions,
-    # which is what produced the rotated-looking output video. Grabbing the
-    # true size from an actual decoded frame avoids this entirely.
-    ret0, probe_frame = cap.read()
-    if not ret0:
-        raise RuntimeError(f"Cannot read any frames from video: {cfg.video_path}")
-    height, width = probe_frame.shape[:2]
-    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)  # rewind so the main loop sees frame 0 again
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
     frame_gps, lat_fn, lon_fn, frame_ts = load_gps(cfg.gps_csv_path)
 
@@ -356,10 +305,7 @@ def run_pipeline(cfg: PipelineConfig, progress_cb=None):
                 direction = None
             dir_label = f"{direction:.1f} deg ({compass_label(direction)})" if direction is not None else "--"
 
-            results = model.track(
-                frame, persist=True, conf=cfg.conf, verbose=False,
-                tracker=tracker_config,
-            )
+            results = model.track(frame, persist=True, conf=cfg.conf, verbose=False)
             annotated = results[0].plot()
             boxes = results[0].boxes
 
@@ -497,6 +443,8 @@ def run_pipeline(cfg: PipelineConfig, progress_cb=None):
         with open(cfg.csv_path, "w", newline="") as f:
             f.write("")
 
+    zip_verified = _verify_zip_is_min_distance_per_object(cfg.zip_path, records, best_snap)
+
     return {
         "output_video_path": cfg.output_video_path,
         "csv_path": cfg.csv_path,
@@ -504,4 +452,102 @@ def run_pipeline(cfg: PipelineConfig, progress_cb=None):
         "frames_processed": frame_id,
         "detection_rows": len(records),
         "unique_objects": len(best_snap),
+        "zip_verified": zip_verified,
     }
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# ZIP integrity verification
+# ──────────────────────────────────────────────────────────────────────────
+def _verify_zip_is_min_distance_per_object(zip_path, records, best_snap) -> bool:
+    """
+    Confirms that detected_frames.zip contains exactly one image per tracked
+    object, and that each image is genuinely that object's minimum-distance
+    frame — rather than just trusting the best_snap bookkeeping done during
+    the frame loop. Logs the result; never raises, so a verification failure
+    is surfaced (via the returned bool / a warning log) without failing an
+    otherwise-successful job.
+    """
+    if not records:
+        logger.info("ZIP integrity check skipped: no detections in this job.")
+        return True
+
+    by_object = {}
+    for rec in records:
+        by_object.setdefault(rec["object_id"], []).append(rec["distance_m"])
+
+    mismatches = []
+    for obj_id, distances in by_object.items():
+        true_min = min(distances)
+        claimed = best_snap.get(obj_id, {}).get("distance_m")
+        if claimed is None or round(claimed, 2) != round(true_min, 2):
+            mismatches.append(obj_id)
+
+    try:
+        with zipfile.ZipFile(zip_path) as z:
+            n_zip_images = len(z.namelist())
+    except Exception as e:
+        logger.warning("Could not open %s to verify ZIP integrity: %s", zip_path, e)
+        return False
+
+    n_objects = len(by_object)
+    ok = (n_zip_images == n_objects) and not mismatches
+
+    if ok:
+        logger.info(
+            "ZIP integrity verified: %d image(s), one per object, each its "
+            "true minimum-distance frame.", n_zip_images
+        )
+    else:
+        logger.warning(
+            "ZIP integrity check FAILED: %d objects vs %d zip images; "
+            "mismatched objects (snapshot is not their true minimum-distance "
+            "frame): %s", n_objects, n_zip_images, mismatches
+        )
+
+    return ok
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Map points — detected frames only
+# ──────────────────────────────────────────────────────────────────────────
+def get_map_points(csv_path, best_only=True):
+    """
+    Returns [{lat, lon, object_id, frame_id, distance_m, is_best_snap}, ...]
+    from a completed job's detections CSV.
+
+    Deliberately reads detections.csv, not the survey gps_csv_path: the
+    detections CSV only ever contains a row for a frame where something was
+    actually detected (see the frame loop above), so every point this
+    returns corresponds to a real detection. The full per-frame GPS survey
+    track is not an acceptable substitute here — it includes every frame of
+    the video, detected or not, and plotting it would show survey coverage
+    rather than street light detections.
+
+    best_only (default True): only return rows where is_best_snap is True —
+    i.e. exactly one point per tracked object, at its closest-range frame,
+    matching one-for-one with the images actually saved into
+    detected_frames.zip. Pass best_only=False to get every detected frame
+    instead (one point per detection row, multiple per object).
+    """
+    if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0:
+        return []
+
+    df = pd.read_csv(csv_path)
+    if df.empty or "gps_lat" not in df.columns or "gps_lon" not in df.columns:
+        return []
+
+    if best_only and "is_best_snap" in df.columns:
+        df = df[df["is_best_snap"] == True]  # noqa: E712 - explicit bool compare for CSV-sourced values
+
+    points = []
+    for row in df.itertuples():
+        points.append({
+            "lat": float(row.gps_lat),
+            "lon": float(row.gps_lon),
+            "object_id": int(row.object_id),
+            "frame_id": int(row.frame_id),
+            "distance_m": float(row.distance_m),
+            "is_best_snap": bool(row.is_best_snap),
+        })
+    return points

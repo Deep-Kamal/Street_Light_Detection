@@ -298,6 +298,8 @@
                 if (p.confidence) popup += `<br>Conf: ${(p.confidence * 100).toFixed(1)}%`;
                 if (p.detection_count) popup += `<br>Detections: ${p.detection_count}`;
                 if (p.frame !== undefined) popup += `<br>Frame: ${p.frame}`;
+                if (p.distance_m !== undefined) popup += `<br>Distance: ${Number(p.distance_m).toFixed(1)}m`;
+                if (p.is_best_snap) popup += `<br>⭐ Closest frame (in ZIP)`;
 
                 const marker = L.marker([lat, lng], { icon }).bindPopup(popup).addTo(map);
                 mapMarkers.push(marker);

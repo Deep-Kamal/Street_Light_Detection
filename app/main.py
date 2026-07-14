@@ -43,7 +43,7 @@ from pydantic import BaseModel
 
 # Import pipelines
 try:
-    from .pipeline import PipelineConfig, run_pipeline
+    from .pipeline import PipelineConfig, run_pipeline, get_map_points
     STREETLIGHT_PIPELINE_AVAILABLE = True
 except ImportError:
     STREETLIGHT_PIPELINE_AVAILABLE = False
@@ -627,6 +627,36 @@ def _load_map_points_for_job(job_id: str, job: dict) -> List[Dict[str, Any]]:
     csv_path = job["result"].get("csv_path")
     if not csv_path or not os.path.exists(csv_path):
         return []
+
+    # Prefer pipeline.py's get_map_points() when the CSV has the street
+    # light pipeline's own schema (gps_lat/gps_lon/object_id/frame_id/
+    # distance_m/is_best_snap) — it is the single source of truth for what
+    # counts as a "detected frame" for that pipeline (see pipeline.py's
+    # docstring), rather than duplicating that decision here via generic
+    # column-guessing. Falls through to the generic logic below for any
+    # other model_type's CSV schema (yolo_detection/yolo_segmentation/
+    # custom), which doesn't have these columns.
+    if STREETLIGHT_PIPELINE_AVAILABLE:
+        try:
+            header = pd.read_csv(csv_path, nrows=0).columns
+        except Exception:
+            header = []
+        streetlight_schema = {"gps_lat", "gps_lon", "object_id", "frame_id", "distance_m", "is_best_snap"}
+        if streetlight_schema.issubset(set(header)):
+            sl_points = get_map_points(csv_path)
+            return [
+                {
+                    "lat": p["lat"],
+                    "lng": p["lon"],
+                    "type": "streetlight",
+                    "confidence": 0.0,
+                    "frame": p["frame_id"],
+                    "object_id": p["object_id"],
+                    "distance_m": p["distance_m"],
+                    "is_best_snap": p["is_best_snap"],
+                }
+                for p in sl_points
+            ]
 
     det_df = pd.read_csv(csv_path)
     if det_df.empty:

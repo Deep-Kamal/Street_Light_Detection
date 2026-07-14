@@ -9,3 +9,11 @@ scipy==1.14.1
 ultralytics==8.3.49
 Flask==3.1.0
 requests==2.32.3
+
+# NOTE ON TORCH / GPU SUPPORT:
+# torch is intentionally NOT pinned here. ultralytics pulls in a compatible
+# torch version automatically, and the Dockerfile installs torch explicitly
+# *before* this file is processed so that step controls which build (CPU-only
+# or CUDA-capable) actually gets installed - see Dockerfile's TORCH_VARIANT
+# build arg. Once torch is already installed, pip's dependency resolver
+# leaves it alone rather than reinstalling a different build on top of it.

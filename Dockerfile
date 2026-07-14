@@ -1,41 +1,17 @@
-# syntax=docker/dockerfile:1
-
-# ── Stage 1: build ───────────────────────────────────────────────────────
-# Installs Python deps (including compiling anything that needs a
-# compiler) into an isolated prefix. None of this stage's layers end up
-# in the final image, so build tools and pip's download/cache files never
-# add to the shipped size.
-FROM python:3.11-slim AS builder
-
-WORKDIR /srv
-
-# No build-essential needed here: torch/torchvision, opencv-python-headless,
-# numpy, pandas, scipy, and ultralytics all ship as pre-built manylinux
-# wheels for Python 3.11, so nothing in requirements.txt needs a compiler.
-# Skipping it also avoids apt-get pulling in gcc/g++ (~300+ MB and a slow,
-# memory-heavy install).
-
-COPY requirements.txt ./requirements.txt
-
-# Install CPU-only torch/torchvision FIRST and pinned, so that when pip
-# resolves requirements.txt afterwards it sees torch already satisfied
-# and does not fall back to pulling the default CUDA-enabled wheel that
-# ultralytics depends on. This is the single biggest size saving (the
-# CUDA wheel + its bundled NVIDIA libs run several GB heavier than CPU).
-RUN pip install --no-cache-dir --user \
-        torch==2.5.1 torchvision==0.20.1 \
-        --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir --user -r requirements.txt
-
-# Strip bytecode caches and packaged docs/tests that some wheels ship,
-# to shrink what gets copied into the final stage.
-RUN find /root/.local -type d -name "__pycache__" -exec rm -rf {} + \
-    && find /root/.local -type d -name "tests" -exec rm -rf {} + \
-    && find /root/.local -type d -name "*.dist-info" -exec sh -c \
-        'rm -f "$1"/RECORD "$1"/INSTALLER "$1"/direct_url.json' _ {} \;
-
-# ── Stage 2: runtime ─────────────────────────────────────────────────────
 FROM python:3.11-slim
+
+# ── CPU / GPU switch (build-time) ───────────────────────────────────────────
+# TORCH_VARIANT=auto (default) installs PyTorch's standard PyPI wheel, which
+#   bundles CUDA support and works on BOTH machine types: it auto-detects a
+#   GPU at runtime (torch.cuda.is_available()) and falls back to CPU
+#   correctly if there isn't one. Simplest option - one image runs anywhere.
+# TORCH_VARIANT=cpu forces the CPU-only wheel instead (~600MB smaller image).
+#   Use this if you know this image will only ever run on CPU-only machines
+#   and want a leaner build.
+#
+#   docker build -t detection-app .                              # auto (default)
+#   docker build --build-arg TORCH_VARIANT=cpu -t detection-app:cpu .
+ARG TORCH_VARIANT=auto
 
 WORKDIR /srv
 
@@ -49,11 +25,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Bring over only the installed Python packages from the builder stage -
-# no compiler, no pip cache, no source downloads.
-COPY --from=builder /root/.local /root/.local
-ENV PATH=/root/.local/bin:$PATH \
-    PYTHONPATH=/root/.local/lib/python3.11/site-packages
+COPY requirements.txt ./requirements.txt
+
+# Install torch FIRST so the TORCH_VARIANT choice above wins; ultralytics
+# (installed next, via requirements.txt) will see a compatible torch
+# already present and won't pull in a different build on top of it.
+RUN if [ "$TORCH_VARIANT" = "cpu" ]; then \
+        echo "Installing CPU-only torch..." && \
+        pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu ; \
+    else \
+        echo "Installing default torch (CUDA-capable, auto-detects GPU at runtime)..." && \
+        pip install --no-cache-dir torch torchvision ; \
+    fi
+
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Backend (FastAPI) - main.py uses relative imports, so it lives in a
 # package directory and is run as `app.main`
@@ -62,8 +47,8 @@ COPY model ./model
 
 # Frontend (Flask) - proxies to the backend over localhost inside this
 # same container, so BACKEND_URL stays on its default (127.0.0.1:8000)
-COPY frontend/flask_app.py ./flask_app.py
-COPY frontend/templates ./templates
+COPY flask_app.py ./flask_app.py
+COPY templates ./templates
 
 COPY start.sh ./start.sh
 RUN chmod +x ./start.sh
