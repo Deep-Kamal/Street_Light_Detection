@@ -47,8 +47,8 @@ COPY model ./model
 
 # Frontend (Flask) - proxies to the backend over localhost inside this
 # same container, so BACKEND_URL stays on its default (127.0.0.1:8000)
-COPY flask_app.py ./flask_app.py
-COPY templates ./templates
+COPY frontend/flask_app.py ./flask_app.py
+COPY frontend/templates ./templates
 
 COPY start.sh ./start.sh
 RUN chmod +x ./start.sh
