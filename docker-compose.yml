@@ -1,32 +1,32 @@
 services:
-  detection-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        TORCH_VARIANT: auto   # "auto" (GPU-capable, falls back to CPU) or "cpu"
-    container_name: detection-app-container
+  streetlight-pipeline:
+    build: .
+    container_name: streetlight-pipeline
+    hostname: streetlight-pipeline
     ports:
-      - "5000:5000"   # operator UI (Flask)
-      - "8000:8000"   # API (FastAPI), for direct/API-only access
+      - "5000:5000"   # Flask frontend (browser)
+      - "8000:8000"   # FastAPI backend (optional, for direct API access)
     volumes:
-      - detection_data:/tmp/detection_jobs
-      - ./model:/srv/model
+      - ./model:/app/model:ro           # Model files (read-only)
+      - ./templates:/app/templates:ro   # HTML templates (read-only)
+      - job-data:/data/jobs             # Persist job results
+      - model-data:/data/models         # Persist uploaded models
+    environment:
+      - DETECTION_DATA_DIR=/data/jobs
+      - MODELS_DIR=/data/models
+      - BACKEND_URL=http://127.0.0.1:8000
+      - FLASK_HOST=0.0.0.0
+      - FLASK_PORT=5000
     restart: unless-stopped
-
-    # ── GPU support (optional) ──────────────────────────────────────────────
-    # Requires: an NVIDIA GPU + driver on the HOST machine, and the NVIDIA
-    # Container Toolkit installed (see README below). If either is missing,
-    # comment out the "deploy" block below and the container will simply run
-    # on CPU - no other change needed, since device="auto" (the default for
-    # every job) detects this automatically at runtime.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:5000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
 volumes:
-  detection_data:
+  job-data:
+    name: streetlight_job_data
+  model-data:
+    name: streetlight_model_data

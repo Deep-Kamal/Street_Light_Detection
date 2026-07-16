@@ -1,68 +1,44 @@
+# ── Base Image ─────────────────────────────────────────────────────────────
 FROM python:3.11-slim
 
-# ── CPU / GPU switch (build-time) ───────────────────────────────────────────
-# TORCH_VARIANT=auto (default) installs PyTorch's standard PyPI wheel, which
-#   bundles CUDA support and works on BOTH machine types: it auto-detects a
-#   GPU at runtime (torch.cuda.is_available()) and falls back to CPU
-#   correctly if there isn't one. Simplest option - one image runs anywhere.
-# TORCH_VARIANT=cpu forces the CPU-only wheel instead (~600MB smaller image).
-#   Use this if you know this image will only ever run on CPU-only machines
-#   and want a leaner build.
-#
-#   docker build -t detection-app .                              # auto (default)
-#   docker build --build-arg TORCH_VARIANT=cpu -t detection-app:cpu .
-ARG TORCH_VARIANT=auto
-
-WORKDIR /srv
-
-# System dependencies:
-#   ffmpeg               - used by pipeline.py to re-encode output video to
-#                          H.264 via subprocess
-#   libgl1, libglib2.0-0 - required by opencv-python-headless / ultralytics
+# ── System Dependencies ────────────────────────────────────────────────────
+# ffmpeg: video re-encoding in pipeline.py
+# libgl/libglib: OpenCV headless requirements
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        libgl1 \
-        libglib2.0-0 \
+    ffmpeg \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./requirements.txt
+# ── Python Dependencies ────────────────────────────────────────────────────
+WORKDIR /app
 
-# Install torch FIRST so the TORCH_VARIANT choice above wins; ultralytics
-# (installed next, via requirements.txt) will see a compatible torch
-# already present and won't pull in a different build on top of it.
-RUN if [ "$TORCH_VARIANT" = "cpu" ]; then \
-        echo "Installing CPU-only torch..." && \
-        pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu ; \
-    else \
-        echo "Installing default torch (CUDA-capable, auto-detects GPU at runtime)..." && \
-        pip install --no-cache-dir torch torchvision ; \
-    fi
-
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Backend (FastAPI) - main.py uses relative imports, so it lives in a
-# package directory and is run as `app.main`
-COPY app ./app
-COPY model ./model
+# ── Copy Application Code ─────────────────────────────────────────────────
+COPY app/ ./app/
+COPY frontend/ ./frontend/
+COPY templates/ ./templates/
+COPY model/ ./model/
+COPY start.sh .
 
-# Frontend (Flask) - proxies to the backend over localhost inside this
-# same container, so BACKEND_URL stays on its default (127.0.0.1:8000)
-COPY frontend/flask_app.py ./flask_app.py
-COPY frontend/templates ./templates
+RUN chmod +x start.sh
 
-COPY start.sh ./start.sh
-RUN chmod +x ./start.sh
+# ── Create Data Directories ───────────────────────────────────────────────
+RUN mkdir -p /data/jobs /data/models
 
-ENV DETECTION_DATA_DIR=/tmp/detection_jobs \
-    MODELS_DIR=/tmp/detection_jobs/models \
+# ── Environment Variables ──────────────────────────────────────────────────
+ENV DETECTION_DATA_DIR=/data/jobs \
+    MODELS_DIR=/data/models \
     BACKEND_URL=http://127.0.0.1:8000 \
     FLASK_HOST=0.0.0.0 \
-    FLASK_PORT=5000 \
-    PYTHONUNBUFFERED=1
+    FLASK_PORT=5000
 
-RUN mkdir -p /tmp/detection_jobs/models
+# ── Ports ──────────────────────────────────────────────────────────────────
+# 5000 = Flask frontend (user-facing)
+# 8000 = FastAPI backend (internal, but exposed for debugging)
+EXPOSE 5000 8000
 
-# 8000 = FastAPI backend (direct API access), 5000 = Flask UI
-EXPOSE 8000 5000
-
+# ── Startup ────────────────────────────────────────────────────────────────
 CMD ["./start.sh"]

@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Virtual env - never ship the host's venv into the image
+venv/
+.venv/
+env/
+
+# Version control
+.git/
+.gitignore
+
+# Local/dev-only folders from the project tree
+tests/
+tmp_debug/
+jobs/
+
+# Runtime data that shouldn't be baked into the image
+*.log
+.tmp_debug/
+
+# Editor/OS cruft
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Docker files themselves don't need to be in the build context copy
+Dockerfile
+docker-compose.yml
+.dockerignore

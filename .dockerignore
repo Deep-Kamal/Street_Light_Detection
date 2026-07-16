@@ -1,9 +1,38 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
-.git
-.gitignore
-.venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual Environment
 venv/
-*.log
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Data (use volumes instead)
+jobs/
+tmp_debug/
+tests/
+
+# Docker
+.docker/
+
+# Git
+.git/
+.gitignore
+
+# Logs
+*.log
